@@ -1,0 +1,19 @@
+[package]
+name = "graph"
+version = "0.1.0"
+authors = ["Ibrahim Alhamad <i.alhamad@5fsoftware.de>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-graphql = "1.17.3"
+actix-web = "2.0.0"
+async-graphql-actix-web = "1.17.3"
+sqlx = { version = "0.3.5", features = ["runtime-async-std", "macros", "chrono", "json", "postgres", "uuid"] }
+dotenv = "0.15.0"
+pretty_env_logger = "0.4.0"
+chrono = "0.4.13"
+log = "0.4.11"
+uuid = "0.8.1"
+async-std = {version = "1.6.2", features = ["attributes"] }
