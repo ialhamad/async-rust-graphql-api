@@ -1,60 +1,59 @@
-use actix_web::{guard, web, App, HttpResponse, HttpServer, Result};
-use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
-use async_graphql_actix_web::{GQLRequest, GQLResponse};
-use db::make_db_pool;
-use dotenv;
+use anyhow::Result;
+use async_graphql::{
+    http::{playground_source, GraphQLPlaygroundConfig},
+    Context, EmptyMutation, EmptySubscription, FieldResult, Object, Schema,
+};
+use sqlx::{query, PgPool, Pool};
+use tide::{self, http::mime, Body, Request, Response, StatusCode};
 
-mod db;
-
+#[derive(Debug)]
 struct Query;
 
 #[Object]
 impl Query {
     #[field(desc = "Returns the sum of a and b")]
-    async fn add(&self, a: i32, b: i32) -> i32 {
-        a + b
+    async fn add(&self, ctx: &Context<'_>) -> FieldResult<i32> {
+        let conn = ctx.data::<PgPool>()?;
+        let row = query!("select 1 as one").fetch_one(conn).await?;
+        Ok(row.one.unwrap())
     }
-    // async fn value_from_db(&self, ctx: &Context<'_>) -> FieldResult<String> {
-    //     let conn = ctx.data::<PgPool>()?;
-    //     Ok(String::new())
-    // }
 }
 
-type MySchema = Schema<Query, EmptyMutation, EmptySubscription>;
-
-async fn index(schema: web::Data<MySchema>, req: GQLRequest) -> GQLResponse {
-    req.into_inner().execute(&schema).await.into()
+#[derive(Clone)]
+struct AppState {
+    schema: Schema<Query, EmptyMutation, EmptySubscription>,
 }
 
-async fn index_playground() -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(playground_source(
-            GraphQLPlaygroundConfig::new("/").subscription_endpoint("/"),
-        )))
+async fn graphql(req: Request<AppState>) -> tide::Result<Response> {
+    let schema = req.state().schema.clone();
+    async_graphql_tide::graphql(req, schema, |query_builder| query_builder).await
 }
 
 #[async_std::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<()> {
     dotenv::dotenv().ok();
     pretty_env_logger::init();
 
-    let db_pool = make_db_pool().await;
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db_pool: PgPool = Pool::new(&db_url).await?;
+
+    let row = query!("select 1 as one").fetch_all(&db_pool).await?;
 
     let schema = Schema::build(Query, EmptyMutation, EmptySubscription)
         .data(db_pool)
         .finish();
 
-    println!("Playground: http://localhost:8000");
-
-    HttpServer::new(move || {
-        App::new()
-            .data(schema.clone())
-            .service(web::resource("/").guard(guard::Post()).to(index))
-            .service(web::resource("/").guard(guard::Get()).to(index_playground))
-    })
-    .bind("127.0.0.1:8000")?
-    .run()
-    .await
+    let app_state = AppState { schema };
+    let mut app = tide::with_state(app_state);
+    app.at("/graphql").post(graphql).get(graphql);
+    app.at("/").get(|_| async move {
+        let mut resp = Response::new(StatusCode::Ok);
+        resp.set_body(Body::from_string(playground_source(
+            GraphQLPlaygroundConfig::new("/graphql"),
+        )));
+        resp.set_content_type(mime::HTML);
+        Ok(resp)
+    });
+    app.listen("127.0.0.1:8080").await?;
+    Ok(())
 }
